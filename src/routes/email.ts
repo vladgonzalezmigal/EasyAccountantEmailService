@@ -8,14 +8,34 @@ config(); // Load environment variables
 
 const router = express.Router();
 
+// Health check endpoint
+router.get('/health', (req: Request, res: Response) => {
+  console.log("health check endpoint hit")
+  res.status(200).json({ message: 'request received' });
+});
+
 // Set up multer to handle multiple files
 const upload = multer({ dest: 'uploads/' });
 // TODO define request body type 
+
+// Helper function to clean up files
+async function cleanupFiles(files: Express.Multer.File[]) {
+  if (!files) return;
+  
+  for (const file of files) {
+    try {
+      await fs.unlink(file.path);
+    } catch (error) {
+      console.error(`Failed to delete file ${file.path}:`, error);
+    }
+  }
+}
 
 // Type for metadata 
 type EmailMetadata = {
   subject: string;
   receiver: string;
+  sender: string;
   bodyText: string; 
   fileName: string;
 };
@@ -24,36 +44,50 @@ router.post(
   '/send-pdfs',
   upload.array('files'), // field name in form-data
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    console.log('Headers:', req.headers['content-type']);
-    console.log("req.file is", req.file)
     const files = req.files as Express.Multer.File[];
-    console.log("request body ",req.body.metadata)
-    console.log("type of request body metadta is ",typeof req.body.metadata)
 
     try {
       // Parse and validate metadata
       let metadata: EmailMetadata[];
-
       try {
         metadata = JSON.parse(req.body.metadata); // TODO: JSON.parse?
-        if (
-            !Array.isArray(metadata) ||
-            !metadata.every(item =>
-              item &&
-              typeof item === 'object' &&
-              typeof item.subject === 'string' &&
-              typeof item.receiver === 'string' &&
-              typeof item.bodyText === 'string' &&
-              typeof item.fileName === 'string'
-            )
-          ) {
-            throw new Error();
+        if (!Array.isArray(metadata)) {
+          throw new Error("metadata is not an array");
+        }
+        
+        const validationResults = metadata.map((item, index) => {
+          if (!item || typeof item !== 'object') {
+            throw new Error(`Item ${index} is not a valid object`);
           }
-      } catch {
-        res.status(400).json({ error: 'Invalid metadata format' });
+          if (typeof item.subject !== 'string') {
+            throw new Error(`Item ${index} has invalid subject`);
+          }
+          if (typeof item.receiver !== 'string') {
+            throw new Error(`Item ${index} has invalid receiver`);
+          }
+          if (typeof item.bodyText !== 'string') {
+            throw new Error(`Item ${index} has invalid bodyText`);
+          }
+          if (typeof item.fileName !== 'string') {
+            throw new Error(`Item ${index} has invalid fileName`);
+          }
+          if (typeof item.sender !== 'string') {
+            throw new Error(`Item ${index} has invalid sender`);
+          }
+          if (item.sender !== process.env.GMAIL_USER) {
+            throw new Error(`Item ${index} sender does not match authorized account`);
+          }
+          
+          return true;
+        });
+        
+        if (!validationResults.every(Boolean)) {
+          throw new Error();
+        }
+      } catch (error) {
+        res.status(400).json({ error: 'Invalid metadata format or sender email does not match authorized account' });
         return;
       }
-      console.log("file length is", files.length)
       if (!files || files.length !== metadata.length) {
         res.status(400).json({ error: 'Mismatched number of files and metadata entries' });
         return;
@@ -88,15 +122,15 @@ router.post(
             },
           ],
         });
-
-        // Delete file asynchronously
-        await fs.unlink(file.path);
       }
 
       res.status(200).json({ message: 'Emails sent successfully' });
     } catch (error) {
       console.error('Email sending failed:', error);
       res.status(500).json({ error: 'Failed to send emails: ' + error });
+    } finally {
+      // Always clean up files, regardless of success or failure
+      await cleanupFiles(files);
     }
   }
 );
