@@ -18,6 +18,7 @@ if (process.env.ALLOWED_ORIGINS){
 const corsOptions = {
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
     // Allow requests with no origin (like mobile apps, curl, etc)
+    console.log("origin is:", origin, "allowed ", allowedOrigins)
     if (!origin) {
       callback(null, true);
       return;
